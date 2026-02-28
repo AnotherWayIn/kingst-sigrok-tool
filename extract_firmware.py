@@ -29,6 +29,8 @@ FW_NAMES = ["fw01A1", "fw01A2", "fw01A3", "fw01A4"]
 
 def find_macho_const_section(data):
     """Find __TEXT __const section in a Mach-O binary. Returns (file_offset, size)."""
+    if len(data) < 32:
+        return None, None
     magic = struct.unpack_from("<I", data, 0)[0]
     if magic == 0xFEEDFACF:  # arm64 / x86_64 little-endian 64-bit
         ncmds = struct.unpack_from("<I", data, 16)[0]
