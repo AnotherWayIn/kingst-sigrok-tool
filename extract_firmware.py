@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
 """
 Kingst LA Series Firmware Extractor for sigrok
-Extracts Intel HEX firmware files from the KingstVIS macOS binary
-so that sigrok/sigrok-cli/PulseView can use Kingst logic analyzers.
+Extracts all firmware from the KingstVIS macOS binary so that
+sigrok/sigrok-cli/PulseView can use Kingst logic analyzers.
 
-Supports: LA1010, LA1010A1/A2/A3/A4 variants
+Supports:
+  Cypress FX2 (USB MCU) firmware:
+    fw01A1.hex  LA1010 rev A1
+    fw01A2.hex  LA1010 rev A2
+    fw01A3.hex  LA1010 rev A3
+    fw01A4.hex  LA1010 rev A4
+    fw03A1.fw   LA1016 / LA2016 / LA5016 / LA5032 / LA1010A series
+  Spartan FPGA bitstreams (required for LA2016/LA5016/LA1016/LA5032/LA1010A):
+    LA1010A0.bitstream  LA1010A0.bitstream  LA1010A1.bitstream  LA1010A2.bitstream
+    LA1016.bitstream    LA1016A1.bitstream  LA2016.bitstream    LA2016A1.bitstream
+    LA2016A2.bitstream  LA5016.bitstream    LA5016A1.bitstream  LA5016A2.bitstream
+    LA5032A0.bitstream  MS6218.bitstream
 
 Usage:
     python3 extract_firmware.py
@@ -14,6 +25,7 @@ Usage:
 import sys
 import os
 import struct
+import zlib
 from pathlib import Path
 
 
@@ -24,7 +36,13 @@ KINGSTVIS_DEFAULT_PATHS = [
 
 DEFAULT_OUTPUT_DIR = Path.home() / ".local" / "share" / "sigrok-firmware" / "kingst"
 
-FW_NAMES = ["fw01A1", "fw01A2", "fw01A3", "fw01A4"]
+# Qt resource tree node is 14 bytes:
+#   [0:4]  name_off  (BE u32) - byte offset into names section, pointing at hash field
+#   [4:6]  flags     (BE u16) - 0=file, 2=directory
+#   [6:10] v1        (BE u32) - dir: child_count; file: (country<<16)|lang
+#   [10:14] v2       (BE u32) - dir: first_child_index; file: data_offset
+_TREE_ENTRY_SIZE = 14
+_FLAG_DIR = 2
 
 
 def find_macho_const_section(data):
@@ -32,7 +50,7 @@ def find_macho_const_section(data):
     if len(data) < 32:
         return None, None
     magic = struct.unpack_from("<I", data, 0)[0]
-    if magic == 0xFEEDFACF:  # arm64 / x86_64 little-endian 64-bit
+    if magic == 0xFEEDFACF:  # 64-bit little-endian Mach-O (arm64 / x86_64)
         ncmds = struct.unpack_from("<I", data, 16)[0]
         cmd_offset = 32
     else:
@@ -56,68 +74,178 @@ def find_macho_const_section(data):
     return None, None
 
 
-def find_qt_names_section(const_data):
-    """Find Qt resource names section start offset within const_data."""
-    # 'fwusb' name entry: length=5 (2 BE) + hash=0x006dec92 (4 BE) + UTF-16BE 'fwusb'
-    needle = struct.pack(">HI", 5, 0x006DEC92) + "fwusb".encode("utf-16-be")
-    pos = const_data.find(needle)
-    if pos != -1:
-        return pos
-    # Fallback: find by UTF-16BE string only
-    pos = const_data.find("fwusb".encode("utf-16-be"))
-    return pos - 6 if pos != -1 else -1
+def _find_qt_anchors(const_data):
+    """
+    Locate the three Qt rcc sections (tree, names, data) inside __TEXT __const.
 
+    Returns (tree_base, names_base, data_base) as byte offsets within const_data,
+    or raises RuntimeError if the binary layout is not recognised.
 
-def scan_names_section(const_data, names_start):
-    """Walk the Qt names section entries; return end offset."""
-    pos = names_start
-    while pos < names_start + 20000:
-        name_len = struct.unpack_from(">H", const_data, pos)[0]
-        if name_len == 0 or name_len > 64:
+    Strategy:
+      1. Find the names section by searching for the 'fwusb' name entry
+         (length=5, hash, UTF-16BE chars).  This is a stable anchor.
+      2. Walk backwards from 'fwusb' to the first entry of the names section.
+      3. Scan forward through all name entries; record chars_off -> name.
+      4. Locate the root tree directory: a 14-byte entry with flags=2, count=3..5,
+         first_child=1 that lives just before the names section.
+      5. Data section starts after the names section (skip zero padding).
+    """
+    # ---- 1. Find 'fwusb' entry ----
+    fwusb_chars = "fwusb".encode("utf-16-be")
+    fwusb_needle = struct.pack(">HI", 5, 0x006DEC92) + fwusb_chars  # len + known hash + chars
+    pos = const_data.find(fwusb_needle)
+    if pos == -1:
+        # Fallback: find by chars only
+        pos = const_data.find(fwusb_chars)
+        if pos == -1:
+            raise RuntimeError("Could not find Qt resource 'fwusb' anchor in binary.")
+        pos -= 6  # back to entry start (len + hash)
+    names_base = pos  # first entry of names section = 'fwusb'
+
+    # ---- 2+3. Walk names section, build name lookup ----
+    # Qt tree name_off can point to either:
+    #   (a) chars_off  = entry_start + 6   (confirmed for some entries)
+    #   (b) hash_off   = entry_start + 2   (confirmed for other entries)
+    # We store both offsets for every name so lookup always works.
+    name_by_off = {}
+    off = 0
+    while True:
+        abs_pos = names_base + off
+        if abs_pos + 6 > len(const_data):
             break
-        pos += 6 + name_len * 2
-    return pos
+        nl = struct.unpack_from(">H", const_data, abs_pos)[0]
+        if nl == 0 or nl > 64:
+            break
+        nb = const_data[abs_pos + 6: abs_pos + 6 + nl * 2]
+        try:
+            nm = nb.decode("utf-16-be")
+        except UnicodeDecodeError:
+            break
+        name_by_off[off + 2] = nm   # hash_off  = entry_start + 2
+        name_by_off[off + 6] = nm   # chars_off = entry_start + 6
+        off += 6 + nl * 2
+    names_end = names_base + off
 
-
-def find_qt_data_section(const_data, search_from):
-    """
-    Find the Qt resource data section: first offset with 5+ consecutive
-    big-endian size-prefixed blobs (each 100..1,000,000 bytes).
-    """
-    offset = search_from
-    while offset < len(const_data) - 8:
-        size = struct.unpack_from(">I", const_data, offset)[0]
+    # ---- 4. Find data section (size-prefixed blob run after names section) ----
+    # The Qt rcc data section lives AFTER the names section in this binary.
+    # Step by 2 (not 4) to avoid missing the start due to alignment gaps.
+    data_base = None
+    search = names_end
+    while search < len(const_data) - 8:
+        size = struct.unpack_from(">I", const_data, search)[0]
         if size == 0:
-            offset += 4
+            search += 2
             continue
-        if 100 <= size <= 1_000_000:
-            run_off, count = offset, 0
-            while count < 5:
-                s = struct.unpack_from(">I", const_data, run_off)[0]
-                if 100 <= s <= 1_000_000:
-                    run_off += 4 + s
-                    count += 1
+        if 1000 <= size <= 2_000_000:
+            run, run_count = search, 0
+            while run_count < 5:
+                s = struct.unpack_from(">I", const_data, run)[0]
+                if 1000 <= s <= 2_000_000:
+                    run += 4 + s
+                    run_count += 1
                 else:
                     break
-            if count >= 5:
-                return offset
-        offset += 4
-    return -1
+            if run_count >= 5:
+                data_base = search
+                break
+        search += 2
+    if data_base is None:
+        raise RuntimeError("Could not locate Qt resource data section.")
 
-
-def extract_hex_entries(const_data, data_start):
-    """Walk data section and collect all Intel HEX blobs (start with b':10')."""
-    entries = []
-    offset = data_start
-    while offset < len(const_data) - 4:
-        size = struct.unpack_from(">I", const_data, offset)[0]
-        if size == 0 or size > 1_000_000:
+    # ---- 5. Find tree base (root dir entry just before names section) ----
+    # Scan backwards in 2-byte steps; look for flags=2, plausible count+child
+    tree_base = None
+    for candidate in range(names_base - _TREE_ENTRY_SIZE, max(0, names_base - 4000), -2):
+        flags = struct.unpack_from(">H", const_data, candidate + 4)[0]
+        if flags != _FLAG_DIR:
+            continue
+        count = struct.unpack_from(">I", const_data, candidate + 6)[0]
+        first_child = struct.unpack_from(">I", const_data, candidate + 10)[0]
+        if 2 <= count <= 10 and first_child == 1:
+            tree_base = candidate
             break
-        blob = const_data[offset + 4: offset + 4 + size]
-        if blob[:3] == b":10" and size > 5000:
-            entries.append(blob)
-        offset += 4 + size
-    return entries
+    if tree_base is None:
+        raise RuntimeError("Could not locate Qt resource tree section.")
+
+    return tree_base, names_base, data_base, name_by_off
+
+
+def _read_tree_entry(const_data, tree_base, idx):
+    pos = tree_base + idx * _TREE_ENTRY_SIZE
+    name_off   = struct.unpack_from(">I", const_data, pos)[0]
+    flags      = struct.unpack_from(">H", const_data, pos + 4)[0]
+    v1         = struct.unpack_from(">I", const_data, pos + 6)[0]
+    v2         = struct.unpack_from(">I", const_data, pos + 10)[0]
+    return name_off, flags, v1, v2
+
+
+def _collect_dir_children(const_data, tree_base, data_base, name_by_off, dir_idx):
+    """
+    Return a list of (name, blob, stored_size) for all direct file children
+    of the directory at tree index dir_idx.  Skips sub-directories.
+    """
+    _, flags, count, first_child = _read_tree_entry(const_data, tree_base, dir_idx)
+    if flags != _FLAG_DIR:
+        return []
+    results = []
+    for ci in range(first_child, first_child + count):
+        name_off, child_flags, cv1, cv2 = _read_tree_entry(const_data, tree_base, ci)
+        if child_flags == _FLAG_DIR:
+            continue  # skip sub-dirs
+        name = name_by_off.get(name_off, "")
+        abs_data = data_base + cv2
+        if abs_data + 4 > len(const_data):
+            continue
+        stored_size = struct.unpack_from(">I", const_data, abs_data)[0]
+        if stored_size == 0 or stored_size > 2_000_000:
+            continue
+        blob = const_data[abs_data + 4: abs_data + 4 + stored_size]
+        results.append((name, blob, stored_size))
+    return results
+
+
+def _find_dir_by_content(const_data, tree_base, data_base, name_by_off, root_idx,
+                         fw_names):
+    """
+    Find the index of a child directory whose file children include names from fw_names.
+    Returns (dir_idx, children_list) or (None, []).
+    """
+    _, flags, count, first_child = _read_tree_entry(const_data, tree_base, root_idx)
+    if flags != _FLAG_DIR:
+        return None, []
+    for ci in range(first_child, first_child + count):
+        _, child_flags, _, _ = _read_tree_entry(const_data, tree_base, ci)
+        if child_flags != _FLAG_DIR:
+            continue
+        children = _collect_dir_children(const_data, tree_base, data_base, name_by_off, ci)
+        child_names = {nm for nm, _, _ in children}
+        if child_names & fw_names:
+            return ci, children
+    return None, []
+
+
+def _decompress_fpga(blob):
+    """Return raw FPGA bitstream bytes, decompressing zlib if needed."""
+    if blob[:2] == b"\xff\xff":
+        return blob  # already raw Xilinx bitstream
+    if len(blob) > 4 and blob[4:6] in (b"\x78\x9c", b"\x78\xda", b"\x78\x01"):
+        return zlib.decompress(blob[4:])
+    return blob
+
+
+# Known Cypress FX2 firmware file stems (start with 'fw', stored in fwusb dir).
+# fw01A1-fw01A4 are Intel HEX (.hex); fw03A1 is raw binary (.fw).
+_CYPRESS_FW_NAMES = {"fw01A1", "fw01A2", "fw01A3", "fw01A4", "fw03A1"}
+
+# Known FPGA model names (stored in fwfpga dir).
+_FPGA_MODELS = {
+    "LA1010A0", "LA1010A1", "LA1010A2",
+    "LA1016",   "LA1016A1",
+    "LA2016",   "LA2016A1", "LA2016A2",
+    "LA5016",   "LA5016A1", "LA5016A2",
+    "LA5032A0",
+    "MS6218",
+}
 
 
 def extract_firmware(kingstvis_path, output_dir=None):
@@ -136,35 +264,79 @@ def extract_firmware(kingstvis_path, output_dir=None):
 
     const_data = data[file_off: file_off + size]
 
-    # --- Find names section ---
-    names_start = find_qt_names_section(const_data)
-    if names_start == -1:
-        print("  ERROR: Could not find Qt resource names section.")
+    # --- Locate Qt rcc sections ---
+    try:
+        tree_base, names_base, data_base, name_by_off = _find_qt_anchors(const_data)
+    except RuntimeError as e:
+        print(f"  ERROR: {e}")
         print("         Make sure you are pointing to the KingstVIS binary, not an installer.")
         return False
 
-    names_end = scan_names_section(const_data, names_start)
-
-    # --- Find data section ---
-    data_start = find_qt_data_section(const_data, names_end)
-    if data_start == -1:
-        print("  ERROR: Could not find Qt resource data section.")
-        return False
-
-    # --- Extract Intel HEX firmware blobs ---
-    hex_blobs = extract_hex_entries(const_data, data_start)
-
-    if not hex_blobs:
-        print("  ERROR: No Intel HEX firmware found in binary.")
-        return False
-
     extracted = []
-    for i, blob in enumerate(hex_blobs[:len(FW_NAMES)]):
-        name = FW_NAMES[i]
-        out_path = output_dir / f"{name}.hex"
-        out_path.write_bytes(blob)
-        print(f"  ✓  {out_path}  ({len(blob):,} bytes)")
-        extracted.append(name)
+
+    # --- Find and extract Cypress FX2 firmware (fwusb directory) ---
+    fwusb_idx, fwusb_children = _find_dir_by_content(
+        const_data, tree_base, data_base, name_by_off, 0, _CYPRESS_FW_NAMES
+    )
+    if fwusb_idx is not None:
+        for stem, blob, stored_size in sorted(fwusb_children):
+            if not stem.startswith("fw"):
+                continue
+            if blob[:3] == b":10":
+                out_name = f"{stem}.hex"
+                out_path = output_dir / out_name
+                out_path.write_bytes(blob)
+                print(f"  ✓  {out_path}  ({stored_size:,} bytes)  [Cypress HEX]")
+                extracted.append(out_name)
+            elif stored_size > 100:
+                out_name = f"{stem}.fw"
+                out_path = output_dir / out_name
+                out_path.write_bytes(blob)
+                print(f"  ✓  {out_path}  ({stored_size:,} bytes)  [Cypress binary]")
+                extracted.append(out_name)
+    else:
+        print("  WARNING: Could not locate fwusb (Cypress FX2) firmware directory.")
+
+    # --- Find and extract FPGA bitstreams (fwfpga directory) ---
+    fwfpga_idx, fwfpga_children = _find_dir_by_content(
+        const_data, tree_base, data_base, name_by_off, 0, _FPGA_MODELS
+    )
+    if fwfpga_idx is not None:
+        unresolved_fpga = []
+        for model, blob, stored_size in sorted(fwfpga_children):
+            raw = _decompress_fpga(blob)
+            if len(raw) < 1000:
+                continue
+            if model not in _FPGA_MODELS:
+                # Name lookup collision — save for fallback resolution below
+                unresolved_fpga.append((blob, stored_size, raw))
+                continue
+            out_name = f"{model}.bitstream"
+            out_path = output_dir / out_name
+            out_path.write_bytes(raw)
+            dec_note = f", {len(raw):,} dec" if len(raw) != stored_size else ""
+            print(f"  ✓  {out_path}  ({stored_size:,} bytes{dec_note})  [FPGA bitstream]")
+            extracted.append(out_name)
+
+        # Resolve any unresolved FPGA blobs by finding the missing model name
+        extracted_models = {n.replace(".bitstream", "") for n in extracted if n.endswith(".bitstream")}
+        missing_models = sorted(_FPGA_MODELS - extracted_models)
+        for i, (blob, stored_size, raw) in enumerate(unresolved_fpga):
+            if i < len(missing_models):
+                model = missing_models[i]
+                out_name = f"{model}.bitstream"
+                out_path = output_dir / out_name
+                out_path.write_bytes(raw)
+                dec_note = f", {len(raw):,} dec" if len(raw) != stored_size else ""
+                print(f"  ✓  {out_path}  ({stored_size:,} bytes{dec_note})  [FPGA bitstream]")
+                extracted.append(out_name)
+    else:
+        print("  WARNING: Could not locate fwfpga (FPGA bitstream) directory.")
+
+    if not extracted:
+        print("  ERROR: No firmware files found in Qt resource tree.")
+        print("         The KingstVIS version may be too old or too new.")
+        return False
 
     print(f"\n  Extracted {len(extracted)} firmware file(s) → {output_dir}")
     return True
@@ -193,11 +365,10 @@ def print_download_instructions():
 
 
 def main():
-    print("=" * 58)
+    print("=" * 60)
     print("  Kingst LA Series Firmware Extractor for sigrok")
-    print("=" * 58)
+    print("=" * 60)
 
-    # Determine KingstVIS path
     if len(sys.argv) >= 2:
         kingstvis_path = sys.argv[1]
     else:

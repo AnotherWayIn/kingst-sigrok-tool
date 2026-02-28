@@ -1,6 +1,8 @@
 # Kingst LA Series — sigrok Firmware Tool
 
-Use your **Kingst LA1010 / LA1010A** logic analyzer with **sigrok**, **sigrok-cli**, and **PulseView** on macOS.
+Use your **Kingst logic analyzer** with **sigrok**, **sigrok-cli**, and **PulseView** on macOS.
+
+Supports the full Kingst LA lineup: LA1010, LA1010A, LA1016, LA2016, LA5016, LA5032, and MS6218.
 
 Kingst devices require proprietary firmware to be uploaded on each connection. This tool extracts that firmware from the free KingstVIS application so sigrok can load it automatically.
 
@@ -19,14 +21,14 @@ bash install_sigrok_driver.sh
 # 3. Extract firmware from KingstVIS  (see below if not installed)
 python3 extract_firmware.py
 
-# 4. Plug in your LA1010 and test
+# 4. Plug in your device and test
 sigrok-cli --driver kingst-la1010 --scan
 ```
 
 Expected output:
 ```
 The following devices were found:
-kingst-la1010:conn=0.3 - Kingst LA1010A with 16 channels: D0 D1 D2 ... D15
+kingst-la1010:conn=0.3 - Kingst LA2016A with 16 channels: D0 D1 D2 ... D15
 ```
 
 ---
@@ -52,23 +54,47 @@ Then run:
 python3 extract_firmware.py
 ```
 
-The script auto-detects KingstVIS at `/Applications/KingstVIS.app` and extracts the firmware to:
+The script auto-detects KingstVIS at `/Applications/KingstVIS.app` and extracts all firmware to:
 ```
 ~/.local/share/sigrok-firmware/kingst/
 ```
 
 ---
 
-## What Gets Installed
+## What Gets Extracted
 
-| File | Purpose |
-|------|---------|
-| `fw01A1.hex` | Firmware for LA1010 hardware rev A1 |
-| `fw01A2.hex` | Firmware for LA1010 hardware rev A2 (most common) |
-| `fw01A3.hex` | Firmware for LA1010 hardware rev A3 |
-| `fw01A4.hex` | Firmware for LA1010 hardware rev A4 |
+### Cypress FX2 USB Firmware (`.hex` / `.fw`)
 
-sigrok identifies your device's hardware revision from its USB descriptor and loads the correct file automatically.
+These are uploaded to the device's USB microcontroller on first connect to switch it from DFU mode into the Kingst LA protocol.
+
+| File | Device |
+|------|--------|
+| `fw01A2.hex` | LA1010 hardware rev A2 |
+| `fw01A3.hex` | LA1010 hardware rev A3 |
+| `fw01A4.hex` | LA1010 hardware rev A4 |
+| `fw03A1.hex` | LA1016 / LA2016 / LA5016 / LA5032 / LA1010A series |
+
+### Spartan FPGA Bitstreams (`.bitstream`)
+
+These configure the on-board FPGA after the Cypress firmware loads. Each model variant has its own bitstream.
+
+| File | Device |
+|------|--------|
+| `LA1010A0.bitstream` | LA1010A rev 0 |
+| `LA1010A1.bitstream` | LA1010A rev 1 |
+| `LA1010A2.bitstream` | LA1010A rev 2 |
+| `LA1016.bitstream` | LA1016 |
+| `LA1016A1.bitstream` | LA1016A rev 1 |
+| `LA2016.bitstream` | LA2016 |
+| `LA2016A1.bitstream` | LA2016A rev 1 |
+| `LA2016A2.bitstream` | LA2016A rev 2 |
+| `LA5016.bitstream` | LA5016 |
+| `LA5016A1.bitstream` | LA5016A rev 1 |
+| `LA5016A2.bitstream` | LA5016A rev 2 |
+| `LA5032A0.bitstream` | LA5032A rev 0 |
+| `MS6218.bitstream` | MS6218 |
+
+sigrok identifies your device's model and hardware revision automatically after the Cypress firmware loads.
 
 ---
 
@@ -93,7 +119,7 @@ This will:
 python3 extract_firmware.py
 ```
 
-Or specify a custom path:
+Or specify a custom KingstVIS path or output directory:
 ```bash
 python3 extract_firmware.py /Applications/KingstVIS.app/Contents/MacOS/KingstVIS
 python3 extract_firmware.py /Applications/KingstVIS.app/Contents/MacOS/KingstVIS ~/custom/firmware/dir
@@ -122,13 +148,13 @@ pulseview
 
 ## How the Firmware Extractor Works
 
-KingstVIS stores its firmware as Intel HEX files inside a Qt resource bundle embedded directly in the macOS Mach-O binary. The extractor:
+KingstVIS embeds all firmware inside a Qt resource bundle in the macOS Mach-O binary. The extractor:
 
 1. Parses the Mach-O `__TEXT __const` section
-2. Locates the Qt resource names section (identified by the `fwusb` directory name in UTF-16BE)
-3. Finds the Qt resource data section by detecting consecutive size-prefixed blobs
-4. Scans each blob for Intel HEX format (`:10...` records)
-5. Writes `fw01A1.hex` through `fw01A4.hex` to the sigrok firmware directory
+2. Locates the Qt resource tree, names, and data sections using the `fwusb` directory anchor
+3. Walks the resource tree to find the `fwusb` directory (Cypress FX2 firmware) and `fwfpga` directory (FPGA bitstreams)
+4. Decompresses any zlib-compressed FPGA bitstreams
+5. Writes all firmware files to the sigrok firmware directory
 
 No network access, no KingstVIS account, no launch required.
 
@@ -142,7 +168,7 @@ No network access, no KingstVIS account, no launch required.
 - Unplug and replug the USB cable
 - Try a different USB port or cable
 
-**`Failed to open resource 'kingst/fw01A2.hex'`**
+**`Failed to open resource 'kingst/fw03A1.hex'`**
 - The firmware file is missing. Run `python3 extract_firmware.py`
 
 **`ERROR: Not a supported Mach-O binary`**
@@ -153,21 +179,33 @@ No network access, no KingstVIS account, no launch required.
 - Make sure Homebrew is installed: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
 - Try running the dependency installs manually from the script
 
-**Device shows wrong channel count**
-- The LA1010 has 16 channels (D0–D15). If fewer show, your firmware revision may differ. All 4 `.hex` files will be tried automatically.
+**FPGA bitstream not found for my model**
+- Your KingstVIS version may not include your model's bitstream. Try downloading the latest KingstVIS from https://www.qdkingst.com/en/vis
 
 ---
 
 ## Supported Devices
 
-| Device | USB VID:PID | Status |
-|--------|------------|--------|
-| Kingst LA1010 (rev A1) | 77A1:01A1 | ✅ Supported |
-| Kingst LA1010 (rev A2) | 77A1:01A2 | ✅ Supported |
-| Kingst LA1010 (rev A3) | 77A1:01A3 | ✅ Supported |
-| Kingst LA1010 (rev A4) | 77A1:01A4 | ✅ Supported |
+| Device | USB VID:PID | Cypress FW | FPGA Bitstream |
+|--------|------------|------------|----------------|
+| Kingst LA1010 (rev A2) | 77A1:01A2 | fw01A2.hex | — |
+| Kingst LA1010 (rev A3) | 77A1:01A3 | fw01A3.hex | — |
+| Kingst LA1010 (rev A4) | 77A1:01A4 | fw01A4.hex | — |
+| Kingst LA1010A (rev 0) | 77A1:03A1 | fw03A1.hex | LA1010A0.bitstream |
+| Kingst LA1010A (rev 1) | 77A1:03A1 | fw03A1.hex | LA1010A1.bitstream |
+| Kingst LA1010A (rev 2) | 77A1:03A1 | fw03A1.hex | LA1010A2.bitstream |
+| Kingst LA1016 | 77A1:03A1 | fw03A1.hex | LA1016.bitstream |
+| Kingst LA1016A (rev 1) | 77A1:03A1 | fw03A1.hex | LA1016A1.bitstream |
+| Kingst LA2016 | 77A1:03A1 | fw03A1.hex | LA2016.bitstream |
+| Kingst LA2016A (rev 1) | 77A1:03A1 | fw03A1.hex | LA2016A1.bitstream |
+| Kingst LA2016A (rev 2) | 77A1:03A1 | fw03A1.hex | LA2016A2.bitstream |
+| Kingst LA5016 | 77A1:03A1 | fw03A1.hex | LA5016.bitstream |
+| Kingst LA5016A (rev 1) | 77A1:03A1 | fw03A1.hex | LA5016A1.bitstream |
+| Kingst LA5016A (rev 2) | 77A1:03A1 | fw03A1.hex | LA5016A2.bitstream |
+| Kingst LA5032A (rev 0) | 77A1:03A1 | fw03A1.hex | LA5032A0.bitstream |
+| Kingst MS6218 | 77A1:03A1 | fw03A1.hex | MS6218.bitstream |
 
-Other Kingst devices (LA2016, LA5016) may work with firmware from their respective KingstVIS versions but are untested.
+Driver support provided by [AlexUg/libsigrok](https://github.com/AlexUg/libsigrok).
 
 ---
 
@@ -175,4 +213,4 @@ Other Kingst devices (LA2016, LA5016) may work with firmware from their respecti
 
 The extractor script (`extract_firmware.py`) and installer (`install_sigrok_driver.sh`) are MIT licensed.
 
-The **firmware files themselves** (`fw01A*.hex`) are proprietary to Kingst Electronics Co., Ltd. and are **not included** in this repository. You extract them from KingstVIS which you download directly from Kingst.
+The **firmware files themselves** are proprietary to Kingst Electronics Co., Ltd. and are **not included** in this repository. You extract them from KingstVIS which you download directly from Kingst.
