@@ -1,6 +1,8 @@
 # Kingst LA Series — sigrok Firmware Tool
 
-Use your **Kingst logic analyzer** with **sigrok**, **sigrok-cli**, and **PulseView** on Linux.
+Use your **Kingst logic analyzer** with **sigrok**, **sigrok-cli**, **PulseView**, and **AI assistants** on Linux.
+
+Includes an **MCP server** so AI tools (Windsurf, Claude Desktop, Cursor) can directly trigger captures, decode protocols, and analyze logic signals.
 
 Supports the full Kingst LA lineup: LA1010, LA1010A, LA1016, LA2016, LA5016, LA5032, and MS6218.
 
@@ -202,6 +204,69 @@ The macOS binary is also supported via `__TEXT __const` section parsing. However
 | Kingst MS6218 | 77A1:03A1 | kingst-la-03a1.fw | kingst-ms6218-fpga.bitstream |
 
 Driver: official [sigrokproject/libsigrok](https://github.com/sigrokproject/libsigrok) `kingst-la2016`.
+
+---
+
+## MCP Server (AI Assistant Integration)
+
+`mcp_server.py` exposes the logic analyzer as an MCP tool server, letting AI assistants (Windsurf, Claude Desktop, Cursor) directly trigger captures and decode protocols.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `scan_device` | Scan for connected Kingst device |
+| `capture` | Capture logic signals, returns `.sr` file |
+| `decode_uart` | Capture + decode UART, returns ASCII text |
+| `decode_protocol` | Capture + run any sigrok protocol decoder |
+| `save_capture` | Save a capture to a named file |
+| `list_decoders` | List all available sigrok decoders |
+
+### Setup
+
+**1. On the Linux machine (where the analyzer is connected):**
+```bash
+# No extra dependencies — uses only Python stdlib
+chmod +x mcp_server.py
+```
+
+**2. In your AI tool's MCP config** (e.g. `~/.config/windsurf/mcp_settings.json` or `claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "kingst-la": {
+      "command": "ssh",
+      "args": [
+        "user@your-linux-host",
+        "python3",
+        "/home/user/kingst-sigrok-tool/mcp_server.py"
+      ]
+    }
+  }
+}
+```
+
+See `mcp_config_example.json` for a ready-to-edit template.
+
+### Example AI Prompts
+
+Once connected, you can ask your AI assistant things like:
+
+- *"Scan for the logic analyzer and tell me what's connected"*
+- *"Capture 10 seconds of UART on CH1 at 115200 baud and show me the output"*
+- *"Decode the SPI traffic on CH0 (CLK), CH1 (MOSI), CH2 (MISO), CH3 (CS)"*
+- *"Save a 30 second capture to /tmp/boot.sr then decode the UART on CH0"*
+
+### What We Captured with This
+
+Using the tool against a Broadcom BCM963167 router's UART:
+```
+CFE version 1.0.38-118.3 for BCM963268
+Chip ID: BCM63167D0, MIPS: 400MHz, DDR: 400MHz
+Total Memory: 134217728 bytes (128MB)
+NAND flash device: Winbond W29N01GV, 128MB
+Board Id: 963167GWV_004R
+```
 
 ---
 

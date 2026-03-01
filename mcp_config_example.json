@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "kingst-la": {
+      "command": "ssh",
+      "args": [
+        "user@your-linux-host",
+        "python3",
+        "/home/user/kingst-sigrok-tool/mcp_server.py"
+      ]
+    }
+  }
+}
