@@ -1,6 +1,6 @@
 # Kingst LA Series — sigrok Firmware Tool
 
-Use your **Kingst logic analyzer** with **sigrok**, **sigrok-cli**, and **PulseView** on macOS.
+Use your **Kingst logic analyzer** with **sigrok**, **sigrok-cli**, and **PulseView** on Linux.
 
 Supports the full Kingst LA lineup: LA1010, LA1010A, LA1016, LA2016, LA5016, LA5032, and MS6218.
 
@@ -8,137 +8,138 @@ Kingst devices require proprietary firmware to be uploaded on each connection. T
 
 ---
 
-## Quick Start
+## Quick Start (Linux)
 
 ```bash
 # 1. Clone this repo
 git clone https://github.com/AnotherWayIn/kingst-sigrok-tool.git
 cd kingst-sigrok-tool
 
-# 2. Install the Kingst-enabled sigrok driver
+# 2. Build and install the official sigrok libsigrok
 bash install_sigrok_driver.sh
 
-# 3. Extract firmware from KingstVIS  (see below if not installed)
-python3 extract_firmware.py
+# 3. Download KingstVIS for Linux and extract firmware
+curl -L -o /tmp/KingstVIS_linux.tar.gz https://www.qdkingst.com/download/vis_linux
+tar -xzf /tmp/KingstVIS_linux.tar.gz -C /tmp
+python3 extract_firmware.py /tmp/KingstVIS/KingstVIS
 
 # 4. Plug in your device and test
-sigrok-cli --driver kingst-la1010 --scan
+sigrok-cli --driver kingst-la2016 --scan
 ```
 
 Expected output:
 ```
 The following devices were found:
-kingst-la1010:conn=0.3 - Kingst LA2016A with 16 channels: D0 D1 D2 ... D15
+kingst-la2016:conn=1.14 - Kingst LA1010 with 18 channels: CH0 CH1 ... CH15 PWM1 PWM2
 ```
 
 ---
 
 ## Requirements
 
-### System
-- macOS 12+ (Apple Silicon or Intel)
+- **Linux** (Debian/Ubuntu/Kali or Fedora/RHEL)
 - Python 3.9+
-- [Homebrew](https://brew.sh)
+- Build tools: `git`, `autoconf`, `automake`, `libtool`
+- Libraries: `libusb-1.0`, `libglib2.0`, `libzip`, `libserialport`
 
 ### KingstVIS (for firmware extraction)
 
 The firmware files inside KingstVIS are proprietary to Kingst Electronics and **cannot be redistributed**. You must download KingstVIS yourself — it is free:
 
-1. Go to **https://www.qdkingst.com/en/vis**
-2. Download **KingstVIS for macOS**
-3. Open the `.dmg` and drag `KingstVIS.app` to `/Applications`
-4. KingstVIS does **not** need to be launched or registered — just installed
-
-Then run:
 ```bash
-python3 extract_firmware.py
+# Download the Linux version (recommended)
+curl -L -o /tmp/KingstVIS_linux.tar.gz https://www.qdkingst.com/download/vis_linux
+tar -xzf /tmp/KingstVIS_linux.tar.gz -C /tmp
+
+# Extract firmware
+python3 extract_firmware.py /tmp/KingstVIS/KingstVIS
 ```
 
-The script auto-detects KingstVIS at `/Applications/KingstVIS.app` and extracts all firmware to:
+The script extracts all firmware to:
 ```
-~/.local/share/sigrok-firmware/kingst/
+~/.local/share/sigrok-firmware/
 ```
 
 ---
 
 ## What Gets Extracted
 
-### Cypress FX2 USB Firmware (`.hex` / `.fw`)
+### MCU (Cypress FX2) Firmware
 
-These are uploaded to the device's USB microcontroller on first connect to switch it from DFU mode into the Kingst LA protocol.
-
-| File | Device |
-|------|--------|
-| `fw01A2.hex` | LA1010 hardware rev A2 |
-| `fw01A3.hex` | LA1010 hardware rev A3 |
-| `fw01A4.hex` | LA1010 hardware rev A4 |
-| `fw03A1.hex` | LA1016 / LA2016 / LA5016 / LA5032 / LA1010A series |
-
-### Spartan FPGA Bitstreams (`.bitstream`)
-
-These configure the on-board FPGA after the Cypress firmware loads. Each model variant has its own bitstream.
+Uploaded to the device's USB microcontroller on first connect. Named for the official sigrok driver.
 
 | File | Device |
 |------|--------|
-| `LA1010A0.bitstream` | LA1010A rev 0 |
-| `LA1010A1.bitstream` | LA1010A rev 1 |
-| `LA1010A2.bitstream` | LA1010A rev 2 |
-| `LA1016.bitstream` | LA1016 |
-| `LA1016A1.bitstream` | LA1016A rev 1 |
-| `LA2016.bitstream` | LA2016 |
-| `LA2016A1.bitstream` | LA2016A rev 1 |
-| `LA2016A2.bitstream` | LA2016A rev 2 |
-| `LA5016.bitstream` | LA5016 |
-| `LA5016A1.bitstream` | LA5016A rev 1 |
-| `LA5016A2.bitstream` | LA5016A rev 2 |
-| `LA5032A0.bitstream` | LA5032A rev 0 |
-| `MS6218.bitstream` | MS6218 |
+| `kingst-la-01a2.fw` | LA1010 / LA1010A (DFU PID 01A2) |
+| `kingst-la-01a3.fw` | LA1010 rev A3 (DFU PID 01A3) |
+| `kingst-la-01a4.fw` | LA1010 rev A4 (DFU PID 01A4) |
+| `kingst-la-03a1.fw` | LA1016 / LA2016 / LA5016 / LA5032 (DFU PID 03A1) |
 
-sigrok identifies your device's model and hardware revision automatically after the Cypress firmware loads.
+### FPGA Bitstreams
+
+Configure the on-board FPGA after MCU firmware loads. Auto-selected by the driver based on device EEPROM.
+
+| File | Device |
+|------|--------|
+| `kingst-la1010a0-fpga.bitstream` | LA1010A rev 0 |
+| `kingst-la1010a1-fpga.bitstream` | LA1010A rev 1 |
+| `kingst-la1010a2-fpga.bitstream` | LA1010A rev 2 |
+| `kingst-la1016-fpga.bitstream` | LA1016 |
+| `kingst-la1016a1-fpga.bitstream` | LA1016A rev 1 |
+| `kingst-la2016-fpga.bitstream` | LA2016 |
+| `kingst-la2016a1-fpga.bitstream` | LA2016A rev 1 |
+| `kingst-la2016a2-fpga.bitstream` | LA2016A rev 2 |
+| `kingst-la5016-fpga.bitstream` | LA5016 |
+| `kingst-la5016a1-fpga.bitstream` | LA5016A rev 1 |
+| `kingst-la5016a2-fpga.bitstream` | LA5016A rev 2 |
+| `kingst-la5032a0-fpga.bitstream` | LA5032A rev 0 |
+| `kingst-ms6218-fpga.bitstream` | MS6218 |
 
 ---
 
 ## Detailed Steps
 
-### Step 1 — Install the Kingst sigrok driver
+### Step 1 — Install libsigrok
 
-The official sigrok `libsigrok` does not include Kingst LA device support. This script installs the [AlexUg/libsigrok](https://github.com/AlexUg/libsigrok) fork which adds it:
+The official `libsigrok` includes the `kingst-la2016` driver which supports all Kingst LA devices.
 
 ```bash
 bash install_sigrok_driver.sh
 ```
 
 This will:
-- Install build dependencies via Homebrew
-- Clone the Kingst-enabled libsigrok fork
-- Build and install it to `/opt/homebrew`
+- Install build dependencies via apt/dnf
+- Clone and build [sigrokproject/libsigrok](https://github.com/sigrokproject/libsigrok)
+- Install to `/usr` and run `ldconfig`
+- Install udev rules for USB access
 
 ### Step 2 — Extract firmware
 
 ```bash
-python3 extract_firmware.py
+python3 extract_firmware.py /tmp/KingstVIS/KingstVIS
 ```
 
-Or specify a custom KingstVIS path or output directory:
+Or specify a custom output directory:
 ```bash
-python3 extract_firmware.py /Applications/KingstVIS.app/Contents/MacOS/KingstVIS
-python3 extract_firmware.py /Applications/KingstVIS.app/Contents/MacOS/KingstVIS ~/custom/firmware/dir
+python3 extract_firmware.py /tmp/KingstVIS/KingstVIS /custom/firmware/dir
 ```
+
+The macOS KingstVIS binary is also supported as a fallback, but the Linux binary is required for correct firmware (the macOS version ships different MCU firmware that is incompatible with the official driver).
 
 ### Step 3 — Capture signals
 
 ```bash
-# Scan for device
-sigrok-cli --driver kingst-la1010 --scan
+# Scan for device (plug in first)
+sigrok-cli --driver kingst-la2016 --scan
 
-# Capture 1 second at 10MHz on channels D0 and D1
-sigrok-cli --driver kingst-la1010 --config samplerate=10m \
-           --channels D0,D1 --time 1s -o capture.sr
+# Capture 1 second at 10MHz on channels CH0 and CH1
+sigrok-cli --driver kingst-la2016 --config samplerate=10m \
+           --channels CH0,CH1 --time 1s -o capture.sr
 
 # Decode UART at 115200 baud
-sigrok-cli --driver kingst-la1010 --config samplerate=1m \
-           --channels D0 --time 5s \
-           --protocol-decoder uart:rx=D0:baudrate=115200
+sigrok-cli --driver kingst-la2016 --config samplerate=1m \
+           --channels CH0 --time 5s \
+           --protocol-decoder uart:rx=CH0:baudrate=115200
 
 # Open in PulseView GUI
 pulseview
@@ -148,64 +149,59 @@ pulseview
 
 ## How the Firmware Extractor Works
 
-KingstVIS embeds all firmware inside a Qt resource bundle in the macOS Mach-O binary. The extractor:
+### Linux ELF mode (recommended)
+KingstVIS for Linux embeds all firmware as Qt resource symbols in the ELF binary. The extractor:
+1. Parses the ELF symbol table to find `_ZL16qt_resource_struct`, `_ZL16qt_resource_name`, `_ZL16qt_resource_data`
+2. Walks the Qt resource tree to find the `fwusb` (MCU firmware) and `fwfpga` (FPGA bitstreams) directories
+3. Converts Intel HEX firmware to raw binary blobs
+4. Writes files with names the official `kingst-la2016` driver expects
 
-1. Parses the Mach-O `__TEXT __const` section
-2. Locates the Qt resource tree, names, and data sections using the `fwusb` directory anchor
-3. Walks the resource tree to find the `fwusb` directory (Cypress FX2 firmware) and `fwfpga` directory (FPGA bitstreams)
-4. Decompresses any zlib-compressed FPGA bitstreams
-5. Writes all firmware files to the sigrok firmware directory
-
-No network access, no KingstVIS account, no launch required.
+### macOS Mach-O mode (fallback)
+The macOS binary is also supported via `__TEXT __const` section parsing. However, the macOS KingstVIS ships MCU firmware that changes the device PID and is incompatible with the official sigrok driver. Use the Linux binary for production.
 
 ---
 
 ## Troubleshooting
 
-**`sigrok-cli --scan` returns nothing / firmware upload failed**
-- Re-run `python3 extract_firmware.py` and check for errors
-- Check firmware files exist: `ls ~/.local/share/sigrok-firmware/kingst/`
-- Unplug and replug the USB cable
-- Try a different USB port or cable
+**`Driver kingst-la2016 not found`**
+- Run `bash install_sigrok_driver.sh` to build the official libsigrok from source
 
-**`Failed to open resource 'kingst/fw03A1.hex'`**
-- The firmware file is missing. Run `python3 extract_firmware.py`
+**`Device failed to re-enumerate`**
+- Firmware file is wrong or missing. Re-run `python3 extract_firmware.py` using the **Linux** KingstVIS binary
 
-**`ERROR: Not a supported Mach-O binary`**
-- Make sure you're pointing to the KingstVIS **binary**, not the `.app` folder:
-  `/Applications/KingstVIS.app/Contents/MacOS/KingstVIS`
+**`Failed to open resource 'kingst-la-01a2.fw'`**
+- Firmware files are missing. Run `python3 extract_firmware.py`
+- Check: `ls ~/.local/share/sigrok-firmware/kingst-la-*.fw`
 
-**`install_sigrok_driver.sh` fails**
-- Make sure Homebrew is installed: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
-- Try running the dependency installs manually from the script
+**Device not found / scan returns nothing**
+- Unplug and replug the USB cable (full power cycle needed between runs)
+- Check USB permissions: `lsusb | grep 77a1` — if it shows, run `sudo sigrok-cli ...` to confirm it's a permissions issue
+- Reinstall udev rules: re-run `bash install_sigrok_driver.sh`
 
-**FPGA bitstream not found for my model**
-- Your KingstVIS version may not include your model's bitstream. Try downloading the latest KingstVIS from https://www.qdkingst.com/en/vis
+**`Unexpected run state` warning**
+- This is normal on first use after device enumeration. The device still works.
 
 ---
 
 ## Supported Devices
 
-| Device | USB VID:PID | Cypress FW | FPGA Bitstream |
-|--------|------------|------------|----------------|
-| Kingst LA1010 (rev A2) | 77A1:01A2 | fw01A2.hex | — |
-| Kingst LA1010 (rev A3) | 77A1:01A3 | fw01A3.hex | — |
-| Kingst LA1010 (rev A4) | 77A1:01A4 | fw01A4.hex | — |
-| Kingst LA1010A (rev 0) | 77A1:03A1 | fw03A1.hex | LA1010A0.bitstream |
-| Kingst LA1010A (rev 1) | 77A1:03A1 | fw03A1.hex | LA1010A1.bitstream |
-| Kingst LA1010A (rev 2) | 77A1:03A1 | fw03A1.hex | LA1010A2.bitstream |
-| Kingst LA1016 | 77A1:03A1 | fw03A1.hex | LA1016.bitstream |
-| Kingst LA1016A (rev 1) | 77A1:03A1 | fw03A1.hex | LA1016A1.bitstream |
-| Kingst LA2016 | 77A1:03A1 | fw03A1.hex | LA2016.bitstream |
-| Kingst LA2016A (rev 1) | 77A1:03A1 | fw03A1.hex | LA2016A1.bitstream |
-| Kingst LA2016A (rev 2) | 77A1:03A1 | fw03A1.hex | LA2016A2.bitstream |
-| Kingst LA5016 | 77A1:03A1 | fw03A1.hex | LA5016.bitstream |
-| Kingst LA5016A (rev 1) | 77A1:03A1 | fw03A1.hex | LA5016A1.bitstream |
-| Kingst LA5016A (rev 2) | 77A1:03A1 | fw03A1.hex | LA5016A2.bitstream |
-| Kingst LA5032A (rev 0) | 77A1:03A1 | fw03A1.hex | LA5032A0.bitstream |
-| Kingst MS6218 | 77A1:03A1 | fw03A1.hex | MS6218.bitstream |
+| Device | DFU VID:PID | MCU Firmware | FPGA Bitstream |
+|--------|-------------|--------------|----------------|
+| Kingst LA1010 (rev A2) | 77A1:01A2 | kingst-la-01a2.fw | kingst-la1010a0/a1/a2-fpga.bitstream |
+| Kingst LA1010 (rev A3) | 77A1:01A3 | kingst-la-01a3.fw | kingst-la1010a0/a1/a2-fpga.bitstream |
+| Kingst LA1010 (rev A4) | 77A1:01A4 | kingst-la-01a4.fw | kingst-la1010a0/a1/a2-fpga.bitstream |
+| Kingst LA1016 | 77A1:03A1 | kingst-la-03a1.fw | kingst-la1016-fpga.bitstream |
+| Kingst LA1016A (rev 1) | 77A1:03A1 | kingst-la-03a1.fw | kingst-la1016a1-fpga.bitstream |
+| Kingst LA2016 | 77A1:03A1 | kingst-la-03a1.fw | kingst-la2016-fpga.bitstream |
+| Kingst LA2016A (rev 1) | 77A1:03A1 | kingst-la-03a1.fw | kingst-la2016a1-fpga.bitstream |
+| Kingst LA2016A (rev 2) | 77A1:03A1 | kingst-la-03a1.fw | kingst-la2016a2-fpga.bitstream |
+| Kingst LA5016 | 77A1:03A1 | kingst-la-03a1.fw | kingst-la5016-fpga.bitstream |
+| Kingst LA5016A (rev 1) | 77A1:03A1 | kingst-la-03a1.fw | kingst-la5016a1-fpga.bitstream |
+| Kingst LA5016A (rev 2) | 77A1:03A1 | kingst-la-03a1.fw | kingst-la5016a2-fpga.bitstream |
+| Kingst LA5032A (rev 0) | 77A1:03A1 | kingst-la-03a1.fw | kingst-la5032a0-fpga.bitstream |
+| Kingst MS6218 | 77A1:03A1 | kingst-la-03a1.fw | kingst-ms6218-fpga.bitstream |
 
-Driver support provided by [AlexUg/libsigrok](https://github.com/AlexUg/libsigrok).
+Driver: official [sigrokproject/libsigrok](https://github.com/sigrokproject/libsigrok) `kingst-la2016`.
 
 ---
 
