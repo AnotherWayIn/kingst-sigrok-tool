@@ -257,17 +257,6 @@ Once connected, you can ask your AI assistant things like:
 - *"Decode the SPI traffic on CH0 (CLK), CH1 (MOSI), CH2 (MISO), CH3 (CS)"*
 - *"Save a 30 second capture to /tmp/boot.sr then decode the UART on CH0"*
 
-### What We Captured with This
-
-Using the tool against a Broadcom BCM963167 router's UART:
-```
-CFE version 1.0.38-118.3 for BCM963268
-Chip ID: BCM63167D0, MIPS: 400MHz, DDR: 400MHz
-Total Memory: 134217728 bytes (128MB)
-NAND flash device: Winbond W29N01GV, 128MB
-Board Id: 963167GWV_004R
-```
-
 ---
 
 ## License
